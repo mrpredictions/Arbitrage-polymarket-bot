@@ -80,7 +80,11 @@ struct Config {
     direct_order_submit_batch_path: String,
     direct_order_submit_fallback_safe: bool,
     direct_order_submit_market_field: String,
+    direct_order_submit_expiration_field: String,
     direct_order_submit_expiration_sec: u64,
+    direct_order_submit_nonce_field: String,
+    direct_order_submit_nonce: String,
+    direct_order_submit_batch_response_key: String,
     market_maker_enabled: bool,
     market_maker_spread_pct: f64,
     market_maker_size_pct: f64,
@@ -165,8 +169,16 @@ impl Config {
             env_or_bool("DIRECT_ORDER_SUBMIT_FALLBACK_SAFE", true);
         let direct_order_submit_market_field =
             env_or("DIRECT_ORDER_SUBMIT_MARKET_FIELD", "market");
+        let direct_order_submit_expiration_field =
+            env_or("DIRECT_ORDER_SUBMIT_EXPIRATION_FIELD", "expiration_sec");
         let direct_order_submit_expiration_sec =
             env_or_u64("DIRECT_ORDER_SUBMIT_EXPIRATION_SEC", 0);
+        let direct_order_submit_nonce_field =
+            env_or("DIRECT_ORDER_SUBMIT_NONCE_FIELD", "");
+        let direct_order_submit_nonce =
+            env_or("DIRECT_ORDER_SUBMIT_NONCE", "");
+        let direct_order_submit_batch_response_key =
+            env_or("DIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY", "data");
         let market_maker_enabled = env_or_bool("MARKET_MAKER_ENABLED", false);
         let market_maker_spread_pct = env_or_f64("MARKET_MAKER_SPREAD_PCT", 0.01);
         let market_maker_size_pct = env_or_f64("MARKET_MAKER_SIZE_PCT", 0.1);
@@ -237,7 +249,11 @@ impl Config {
             direct_order_submit_batch_path,
             direct_order_submit_fallback_safe,
             direct_order_submit_market_field,
+            direct_order_submit_expiration_field,
             direct_order_submit_expiration_sec,
+            direct_order_submit_nonce_field,
+            direct_order_submit_nonce,
+            direct_order_submit_batch_response_key,
             market_maker_enabled,
             market_maker_spread_pct,
             market_maker_size_pct,
@@ -2634,8 +2650,10 @@ async fn submit_orders_batch(
         return Err(parse_order_error(&payload, status.as_u16()));
     }
     let data = payload
-        .get("data")
+        .get(config.direct_order_submit_batch_response_key.as_str())
         .and_then(Value::as_array)
+        .or_else(|| payload.get("data").and_then(Value::as_array))
+        .or_else(|| payload.get("results").and_then(Value::as_array))
         .or_else(|| payload.as_array())
         .ok_or_else(|| "batch order response not array".to_string())?;
     if data.len() != intents.len() {
@@ -2658,11 +2676,20 @@ fn build_order_payload(config: &Config, intent: &OrderIntent) -> Value {
         "order_type": intent.order_type,
         "client_order_id": format!("{}:{}", intent.label, now_string()),
     });
-    if config.direct_order_submit_expiration_sec > 0 {
-        payload["expiration_sec"] = Value::from(config.direct_order_submit_expiration_sec);
+    if config.direct_order_submit_expiration_sec > 0
+        && !config.direct_order_submit_expiration_field.is_empty()
+    {
+        payload[config.direct_order_submit_expiration_field.as_str()] =
+            Value::from(config.direct_order_submit_expiration_sec);
     }
     if !config.direct_order_submit_market_field.is_empty() {
         payload[config.direct_order_submit_market_field.as_str()] = Value::from(intent.market.clone());
+    }
+    if !config.direct_order_submit_nonce_field.is_empty()
+        && !config.direct_order_submit_nonce.is_empty()
+    {
+        payload[config.direct_order_submit_nonce_field.as_str()] =
+            Value::from(config.direct_order_submit_nonce.clone());
     }
     payload
 }
@@ -3442,7 +3469,7 @@ fn parse_market_overrides(input: &str) -> HashMap<String, MarketOverride> {
 
 fn build_env_template(config: &Config) -> String {
     format!(
-        "CLOB_HOST={}\nGAMMA_API={}\nPOLYGON_RPC={}\nSAFE_ADDRESS={}\nBOT_ADDRESS={}\nCHAIN_ID={}\nPRIVATE_KEY={}\nPOLYMARKET_API_KEY={}\nPOLYMARKET_API_SECRET={}\nPOLYMARKET_API_PASSPHRASE={}\nCHAINLINK_USERNAME={}\nCHAINLINK_PASSWORD={}\nTELEGRAM_TOKEN={}\nTELEGRAM_CHAT_ID={}\nTHRESHOLD_PCT={}\nMIN_EDGE_PCT={}\nSUM_THRESHOLD={}\nMAX_SIZE={}\nRISK_PCT={}\nDRY_RUN={}\nCOOLDOWN_SEC={}\nDELAY_ADD_1H_SEC={}\nMAX_DAILY_LOSS={}\nMAX_INVENTORY={}\nMIN_LIQUIDITY={}\nTOKEN_CACHE_TTL_SEC={}\nKILL_SWITCH={}\nENABLED_ASSETS={}\nENABLED_TIMEFRAMES={}\nSTARTING_CAPITAL={}\nORDER_TTL_SEC={}\nORDER_PRICE_DRIFT_PCT={}\nFEED_STALE_SEC={}\nORDERBOOK_STALE_SEC={}\nORDER_ID_SYNC_WINDOW_SEC={}\nORDER_STATUS_POLL_SEC={}\nORDER_REFRESH_WINDOW_SEC={}\nORDER_STATUS_PATH={}\nSAFE_TX_CONFIRM_TIMEOUT_SEC={}\nSAFE_TX_CONFIRM_POLL_SEC={}\nORDERBOOK_MAX_FRACTION={}\nDIRECT_ORDER_SUBMIT_ENABLED={}\nDIRECT_ORDER_SUBMIT_MODE={}\nDIRECT_ORDER_SUBMIT_PATH={}\nDIRECT_ORDER_SUBMIT_BATCH_PATH={}\nDIRECT_ORDER_SUBMIT_FALLBACK_SAFE={}\nDIRECT_ORDER_SUBMIT_MARKET_FIELD={}\nDIRECT_ORDER_SUBMIT_EXPIRATION_SEC={}\nMARKET_MAKER_ENABLED={}\nMARKET_MAKER_SPREAD_PCT={}\nMARKET_MAKER_SIZE_PCT={}\nUSDC_CONTRACT={}\nUSDC_DECIMALS={}\nCLOB_CONTRACT={}\nMULTISEND_CONTRACT={}\nORDERBOOK_PATH={}\nMARKET_OVERRIDES={}\n",
+        "CLOB_HOST={}\nGAMMA_API={}\nPOLYGON_RPC={}\nSAFE_ADDRESS={}\nBOT_ADDRESS={}\nCHAIN_ID={}\nPRIVATE_KEY={}\nPOLYMARKET_API_KEY={}\nPOLYMARKET_API_SECRET={}\nPOLYMARKET_API_PASSPHRASE={}\nCHAINLINK_USERNAME={}\nCHAINLINK_PASSWORD={}\nTELEGRAM_TOKEN={}\nTELEGRAM_CHAT_ID={}\nTHRESHOLD_PCT={}\nMIN_EDGE_PCT={}\nSUM_THRESHOLD={}\nMAX_SIZE={}\nRISK_PCT={}\nDRY_RUN={}\nCOOLDOWN_SEC={}\nDELAY_ADD_1H_SEC={}\nMAX_DAILY_LOSS={}\nMAX_INVENTORY={}\nMIN_LIQUIDITY={}\nTOKEN_CACHE_TTL_SEC={}\nKILL_SWITCH={}\nENABLED_ASSETS={}\nENABLED_TIMEFRAMES={}\nSTARTING_CAPITAL={}\nORDER_TTL_SEC={}\nORDER_PRICE_DRIFT_PCT={}\nFEED_STALE_SEC={}\nORDERBOOK_STALE_SEC={}\nORDER_ID_SYNC_WINDOW_SEC={}\nORDER_STATUS_POLL_SEC={}\nORDER_REFRESH_WINDOW_SEC={}\nORDER_STATUS_PATH={}\nSAFE_TX_CONFIRM_TIMEOUT_SEC={}\nSAFE_TX_CONFIRM_POLL_SEC={}\nORDERBOOK_MAX_FRACTION={}\nDIRECT_ORDER_SUBMIT_ENABLED={}\nDIRECT_ORDER_SUBMIT_MODE={}\nDIRECT_ORDER_SUBMIT_PATH={}\nDIRECT_ORDER_SUBMIT_BATCH_PATH={}\nDIRECT_ORDER_SUBMIT_FALLBACK_SAFE={}\nDIRECT_ORDER_SUBMIT_MARKET_FIELD={}\nDIRECT_ORDER_SUBMIT_EXPIRATION_FIELD={}\nDIRECT_ORDER_SUBMIT_EXPIRATION_SEC={}\nDIRECT_ORDER_SUBMIT_NONCE_FIELD={}\nDIRECT_ORDER_SUBMIT_NONCE={}\nDIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY={}\nMARKET_MAKER_ENABLED={}\nMARKET_MAKER_SPREAD_PCT={}\nMARKET_MAKER_SIZE_PCT={}\nUSDC_CONTRACT={}\nUSDC_DECIMALS={}\nCLOB_CONTRACT={}\nMULTISEND_CONTRACT={}\nORDERBOOK_PATH={}\nMARKET_OVERRIDES={}\n",
         config.host,
         config.gamma_api,
         config.polygon_rpc,
@@ -3490,7 +3517,11 @@ fn build_env_template(config: &Config) -> String {
         config.direct_order_submit_batch_path,
         config.direct_order_submit_fallback_safe,
         config.direct_order_submit_market_field,
+        config.direct_order_submit_expiration_field,
         config.direct_order_submit_expiration_sec,
+        config.direct_order_submit_nonce_field,
+        config.direct_order_submit_nonce,
+        config.direct_order_submit_batch_response_key,
         config.market_maker_enabled,
         config.market_maker_spread_pct,
         config.market_maker_size_pct,
