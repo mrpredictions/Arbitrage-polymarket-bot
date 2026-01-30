@@ -1212,6 +1212,16 @@ async fn process_update(
 
     let params = config.market_params(asset);
     let pct_change = (signal_price - last_spot).abs() / last_spot;
+            .unwrap_or(avg_price)
+    } else {
+        avg_price
+    };
+
+    let vol_key = format!("{}:{}", asset, timeframe);
+    let volatility = update_volatility(vol_trackers, &vol_key, avg_price);
+
+    let params = config.market_params(asset);
+    let pct_change = (avg_price - last_spot).abs() / last_spot;
     let threshold = params.threshold_pct / (1.0 + volatility * 10.0);
     let refresh_pending = refresh_request_active(state, &config, &market_key);
     if pct_change < threshold && !refresh_pending {
@@ -1219,6 +1229,7 @@ async fn process_update(
     }
 
     let direction = if signal_price > last_spot { "UP" } else { "DOWN" };
+    let direction = if avg_price > last_spot { "UP" } else { "DOWN" };
     println!(
         "{} {} spot moved {:.2}% -> {}",
         asset.to_uppercase(),
@@ -1295,6 +1306,7 @@ async fn process_update(
     let mut call_data = vec![];
     let mut action_label = None;
     let mut order_intents: Vec<OrderIntent> = Vec::new();
+    let mut order_intents: Vec<(String, String, String, f64, f64)> = Vec::new();
 
     if yes_price + no_price < params.sum_threshold {
         let risk_amount = effective_balance * params.max_risk_pct.unwrap_or(config.risk_pct);
@@ -1325,6 +1337,12 @@ async fn process_update(
             yes_price + 0.005,
             size_yes,
             "gtc",
+        order_intents.push((
+            token_info.yes_token_id.clone(),
+            "buy_yes".to_string(),
+            "buy".to_string(),
+            yes_price + 0.005,
+            size_yes,
         ));
         let buy_no_data = encode_place_order(
             token_info.no_token_id.clone(),
@@ -1342,6 +1360,12 @@ async fn process_update(
             no_price + 0.005,
             size_no,
             "gtc",
+        order_intents.push((
+            token_info.no_token_id.clone(),
+            "buy_no".to_string(),
+            "buy".to_string(),
+            no_price + 0.005,
+            size_no,
         ));
         let sell_yes_size = cap_size_by_depth(
             size_yes / 2.0,
@@ -1365,6 +1389,12 @@ async fn process_update(
             1.0 - (yes_price - 0.005),
             sell_yes_size,
             "gtc",
+        order_intents.push((
+            token_info.yes_token_id.clone(),
+            "sell_yes".to_string(),
+            "sell".to_string(),
+            1.0 - (yes_price - 0.005),
+            sell_yes_size,
         ));
         let sell_no_size = cap_size_by_depth(
             size_no / 2.0,
@@ -1388,6 +1418,12 @@ async fn process_update(
             1.0 - (no_price - 0.005),
             sell_no_size,
             "gtc",
+        order_intents.push((
+            token_info.no_token_id.clone(),
+            "sell_no".to_string(),
+            "sell".to_string(),
+            1.0 - (no_price - 0.005),
+            sell_no_size,
         ));
         action_label = Some("sum_to_one".to_string());
         send_alert(telegram_api, config.telegram_chat_id, "Sum-to-1 batch executed!").await;
@@ -1417,6 +1453,12 @@ async fn process_update(
                 yes_price + 0.005,
                 size,
                 "gtc",
+            order_intents.push((
+                token_info.yes_token_id.clone(),
+                "buy_yes".to_string(),
+                "buy".to_string(),
+                yes_price + 0.005,
+                size,
             ));
             let sell_size = cap_size_by_depth(
                 size / 2.0,
@@ -1440,6 +1482,12 @@ async fn process_update(
                 1.0 - (yes_price - 0.005),
                 sell_size,
                 "gtc",
+            order_intents.push((
+                token_info.yes_token_id.clone(),
+                "sell_yes".to_string(),
+                "sell".to_string(),
+                1.0 - (yes_price - 0.005),
+                sell_size,
             ));
             action_label = Some("buy_yes".to_string());
             send_alert(telegram_api, config.telegram_chat_id, "Batched YES buy + LP!").await;
@@ -1470,6 +1518,12 @@ async fn process_update(
                 no_price + 0.005,
                 size,
                 "gtc",
+            order_intents.push((
+                token_info.no_token_id.clone(),
+                "buy_no".to_string(),
+                "buy".to_string(),
+                no_price + 0.005,
+                size,
             ));
             let sell_size = cap_size_by_depth(
                 size / 2.0,
@@ -1493,6 +1547,12 @@ async fn process_update(
                 1.0 - (no_price - 0.005),
                 sell_size,
                 "gtc",
+            order_intents.push((
+                token_info.no_token_id.clone(),
+                "sell_no".to_string(),
+                "sell".to_string(),
+                1.0 - (no_price - 0.005),
+                sell_size,
             ));
             action_label = Some("buy_no".to_string());
             send_alert(telegram_api, config.telegram_chat_id, "Batched NO buy + LP!").await;
@@ -1533,6 +1593,12 @@ async fn process_update(
                 yes_buy_price,
                 yes_buy_size,
                 "gtc",
+            order_intents.push((
+                token_info.yes_token_id.clone(),
+                "mm_buy_yes".to_string(),
+                "buy".to_string(),
+                yes_buy_price,
+                yes_buy_size,
             ));
         }
         if yes_sell_size > 0.0 {
@@ -1552,6 +1618,12 @@ async fn process_update(
                 yes_sell_price,
                 yes_sell_size,
                 "gtc",
+            order_intents.push((
+                token_info.yes_token_id.clone(),
+                "mm_sell_yes".to_string(),
+                "sell".to_string(),
+                yes_sell_price,
+                yes_sell_size,
             ));
         }
 
@@ -1579,6 +1651,12 @@ async fn process_update(
                 no_buy_price,
                 no_buy_size,
                 "gtc",
+            order_intents.push((
+                token_info.no_token_id.clone(),
+                "mm_buy_no".to_string(),
+                "buy".to_string(),
+                no_buy_price,
+                no_buy_size,
             ));
         }
         if no_sell_size > 0.0 {
@@ -1598,6 +1676,12 @@ async fn process_update(
                 no_sell_price,
                 no_sell_size,
                 "gtc",
+            order_intents.push((
+                token_info.no_token_id.clone(),
+                "mm_sell_no".to_string(),
+                "sell".to_string(),
+                no_sell_price,
+                no_sell_size,
             ));
         }
 
@@ -1677,6 +1761,27 @@ async fn process_update(
             }
         }
 
+        let tx = TransactionRequest::new()
+            .to(config.safe_address)
+            .data(exec_data)
+            .chain_id(config.chain_id);
+        let typed_tx: TypedTransaction = tx.into();
+        let signature = wallet.sign_transaction(&typed_tx).await.unwrap();
+        let rlp = typed_tx.rlp_signed(&signature);
+        if !config.dry_run {
+            let pending = provider.send_raw_transaction(rlp).await.unwrap();
+            let tx_hash = pending.tx_hash();
+            let state_clone = state.clone();
+            let provider_clone = provider.clone();
+            let config_clone = config.clone();
+            tokio::spawn(async move {
+                await_safe_tx_receipt(state_clone, provider_clone, tx_hash, config_clone).await;
+            });
+        } else {
+            println!("[DRY-RUN] Batched via Gnosis");
+        }
+
+        let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         if let Some(conn) = redis_conn {
             conn.set(key, current_time.to_string()).await.unwrap();
         }
@@ -1711,6 +1816,31 @@ async fn process_update(
         size: config.max_size,
         timestamp: now_string(),
     };
+        for (token_id, label, direction, price, size) in order_intents {
+            pending_orders.push(OpenOrder {
+                id: format!("{}:{}:{}", base_id, label, current_time),
+                market: base_id.clone(),
+                side: label,
+                direction,
+                token_id,
+                price,
+                size,
+                created_at,
+                status: "open".to_string(),
+                last_update: Instant::now(),
+                remote_id: None,
+            });
+        }
+        track_open_orders(state, pending_orders);
+        sync_open_order_ids(state, http_client, &config).await;
+
+        let trade_summary = TradeSummary {
+            market: format!("{}:{}", asset, timeframe),
+            side: action_label.clone().unwrap_or_else(|| "trade".to_string()),
+            price: avg_price,
+            size: config.max_size,
+            timestamp: now_string(),
+        };
         update_trade(state, trade_summary.clone());
         update_exposure(state, config.max_size);
         update_position_summary(
@@ -1744,6 +1874,12 @@ async fn process_update(
             token_id: None,
         },
     );
+                price: avg_price,
+                timestamp: trade_summary.timestamp.clone(),
+                order_id: None,
+                token_id: None,
+            },
+        );
 
         if let Some(conn) = redis_conn {
             let _ = conn
@@ -1757,6 +1893,7 @@ async fn process_update(
 
     if let Some(conn) = redis_conn {
         conn.set(last_spot_key, signal_price.to_string()).await.unwrap();
+        conn.set(last_spot_key, avg_price.to_string()).await.unwrap();
     }
 
     Ok(())
@@ -1917,6 +2054,7 @@ async fn poll_fills(state: AppState, http_client: Client, config: Config) {
             }
         }
         sleep(Duration::from_secs(config.order_status_poll_sec.max(5))).await;
+        sleep(Duration::from_secs(10)).await;
     }
 }
 
@@ -3470,6 +3608,7 @@ fn parse_market_overrides(input: &str) -> HashMap<String, MarketOverride> {
 fn build_env_template(config: &Config) -> String {
     format!(
         "CLOB_HOST={}\nGAMMA_API={}\nPOLYGON_RPC={}\nSAFE_ADDRESS={}\nBOT_ADDRESS={}\nCHAIN_ID={}\nPRIVATE_KEY={}\nPOLYMARKET_API_KEY={}\nPOLYMARKET_API_SECRET={}\nPOLYMARKET_API_PASSPHRASE={}\nCHAINLINK_USERNAME={}\nCHAINLINK_PASSWORD={}\nTELEGRAM_TOKEN={}\nTELEGRAM_CHAT_ID={}\nTHRESHOLD_PCT={}\nMIN_EDGE_PCT={}\nSUM_THRESHOLD={}\nMAX_SIZE={}\nRISK_PCT={}\nDRY_RUN={}\nCOOLDOWN_SEC={}\nDELAY_ADD_1H_SEC={}\nMAX_DAILY_LOSS={}\nMAX_INVENTORY={}\nMIN_LIQUIDITY={}\nTOKEN_CACHE_TTL_SEC={}\nKILL_SWITCH={}\nENABLED_ASSETS={}\nENABLED_TIMEFRAMES={}\nSTARTING_CAPITAL={}\nORDER_TTL_SEC={}\nORDER_PRICE_DRIFT_PCT={}\nFEED_STALE_SEC={}\nORDERBOOK_STALE_SEC={}\nORDER_ID_SYNC_WINDOW_SEC={}\nORDER_STATUS_POLL_SEC={}\nORDER_REFRESH_WINDOW_SEC={}\nORDER_STATUS_PATH={}\nSAFE_TX_CONFIRM_TIMEOUT_SEC={}\nSAFE_TX_CONFIRM_POLL_SEC={}\nORDERBOOK_MAX_FRACTION={}\nDIRECT_ORDER_SUBMIT_ENABLED={}\nDIRECT_ORDER_SUBMIT_MODE={}\nDIRECT_ORDER_SUBMIT_PATH={}\nDIRECT_ORDER_SUBMIT_BATCH_PATH={}\nDIRECT_ORDER_SUBMIT_FALLBACK_SAFE={}\nDIRECT_ORDER_SUBMIT_MARKET_FIELD={}\nDIRECT_ORDER_SUBMIT_EXPIRATION_FIELD={}\nDIRECT_ORDER_SUBMIT_EXPIRATION_SEC={}\nDIRECT_ORDER_SUBMIT_NONCE_FIELD={}\nDIRECT_ORDER_SUBMIT_NONCE={}\nDIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY={}\nMARKET_MAKER_ENABLED={}\nMARKET_MAKER_SPREAD_PCT={}\nMARKET_MAKER_SIZE_PCT={}\nUSDC_CONTRACT={}\nUSDC_DECIMALS={}\nCLOB_CONTRACT={}\nMULTISEND_CONTRACT={}\nORDERBOOK_PATH={}\nMARKET_OVERRIDES={}\n",
+        "CLOB_HOST={}\nGAMMA_API={}\nPOLYGON_RPC={}\nSAFE_ADDRESS={}\nBOT_ADDRESS={}\nCHAIN_ID={}\nPRIVATE_KEY={}\nPOLYMARKET_API_KEY={}\nPOLYMARKET_API_SECRET={}\nPOLYMARKET_API_PASSPHRASE={}\nTELEGRAM_TOKEN={}\nTELEGRAM_CHAT_ID={}\nTHRESHOLD_PCT={}\nMIN_EDGE_PCT={}\nSUM_THRESHOLD={}\nMAX_SIZE={}\nRISK_PCT={}\nDRY_RUN={}\nCOOLDOWN_SEC={}\nDELAY_ADD_1H_SEC={}\nMAX_DAILY_LOSS={}\nMAX_INVENTORY={}\nMIN_LIQUIDITY={}\nTOKEN_CACHE_TTL_SEC={}\nKILL_SWITCH={}\nENABLED_ASSETS={}\nENABLED_TIMEFRAMES={}\nSTARTING_CAPITAL={}\nORDER_TTL_SEC={}\nORDER_PRICE_DRIFT_PCT={}\nFEED_STALE_SEC={}\nORDERBOOK_STALE_SEC={}\nORDER_ID_SYNC_WINDOW_SEC={}\nORDER_STATUS_POLL_SEC={}\nORDER_REFRESH_WINDOW_SEC={}\nORDER_STATUS_PATH={}\nSAFE_TX_CONFIRM_TIMEOUT_SEC={}\nSAFE_TX_CONFIRM_POLL_SEC={}\nORDERBOOK_MAX_FRACTION={}\nMARKET_MAKER_ENABLED={}\nMARKET_MAKER_SPREAD_PCT={}\nMARKET_MAKER_SIZE_PCT={}\nUSDC_CONTRACT={}\nUSDC_DECIMALS={}\nCLOB_CONTRACT={}\nMULTISEND_CONTRACT={}\nORDERBOOK_PATH={}\nMARKET_OVERRIDES={}\n",
         config.host,
         config.gamma_api,
         config.polygon_rpc,
