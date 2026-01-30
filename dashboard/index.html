@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Polymarket Latency Arb Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div>
+          <p class="eyebrow">Polymarket Operations Suite</p>
+          <h1>Polymarket Latency Arb Dashboard</h1>
+        </div>
+        <div class="status-row">
+          <span class="status-pill" id="status-pill">LIVE</span>
+          <span class="subtle" id="status-text">Waiting for telemetry...</span>
+        </div>
+      </header>
+
+      <main class="grid">
+        <section class="card">
+          <h2>Wallet Balance (USDC)</h2>
+          <div class="metric">
+            <span class="value" id="wallet-balance">$0.00</span>
+            <span class="label">Uptime</span>
+            <span class="value" id="uptime">0s</span>
+            <span class="label">Safe TX Count</span>
+            <span class="value" id="safe-tx">-</span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Positions Placed</h2>
+          <div class="metric">
+            <span class="value" id="positions">0</span>
+            <span class="label">Wins / Losses</span>
+            <span class="value" id="wins-losses">0 / 0</span>
+            <span class="label">Drawdown / VaR (5/10/20)</span>
+            <span class="value" id="drawdown-var">0 / 0</span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Last Trade</h2>
+          <div class="metric">
+            <span class="value" id="last-trade">No trades yet</span>
+            <span class="label">Market Slug</span>
+            <span class="value" id="last-market">-</span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Kill Switch</h2>
+          <div class="metric">
+            <span class="value" id="kill-switch">OFF</span>
+            <span class="label">Exposure (USDC)</span>
+            <span class="value" id="exposure">0</span>
+          </div>
+        </section>
+
+        <section class="card wide">
+          <div class="card-header">
+            <h2>Command Center</h2>
+            <span class="badge" id="api-status">API: --</span>
+          </div>
+          <div class="button-row">
+            <button class="btn primary" id="toggle-kill">Power ON/OFF</button>
+            <button class="btn" id="check-status">Check Status</button>
+            <button class="btn" id="check-connections">Check API/Wallet</button>
+            <button class="btn ghost" id="download-env">Download .env</button>
+          </div>
+          <p class="subtle" id="action-feedback">Ready for commands.</p>
+        </section>
+
+        <section class="card wide">
+          <h2>Connection Health</h2>
+          <div class="list" id="connection-health">
+            <div class="list-row">
+              <span>Awaiting live telemetry...</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Latency (ms)</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Avg</th>
+                <th>Last</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody id="latency-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Pipeline Latency (ms)</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th>Avg</th>
+                <th>Last</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody id="pipeline-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Orderbook Depth</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Bids</th>
+                <th>Asks</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody id="orderbook-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Recent Fills</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Action</th>
+                <th>PnL</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="fills-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Incident Timeline</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Level</th>
+                <th>Message</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="incident-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Positions</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>YES</th>
+                <th>NO</th>
+                <th>Cash</th>
+                <th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="positions-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Per-market PnL</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="per-market-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>PnL History</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Entry</th>
+                <th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="pnl-history-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card">
+          <h2>Wallets</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Label</th>
+                <th>Address</th>
+              </tr>
+            </thead>
+            <tbody id="wallets-table">
+              <tr>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card wide">
+          <h2>Setup Checklist</h2>
+          <div class="pill-list">
+            <span>Start balance: $300</span>
+            <span>BTC-only launch</span>
+            <span>Risk exposure: 100%</span>
+            <span>Kill switch ready</span>
+            <span>Live telemetry</span>
+          </div>
+          <div class="env-preview">
+            <pre id="env-template">Loading .env template...</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const state = {
+        killSwitch: false,
+        envTemplate: "",
+      };
+
+      const statusPill = document.getElementById("status-pill");
+      const statusText = document.getElementById("status-text");
+      const actionFeedback = document.getElementById("action-feedback");
+      const apiStatus = document.getElementById("api-status");
+
+      const updateTable = (body, rows, columns) => {
+        if (!rows.length) {
+          body.innerHTML = `<tr>${columns.map(() => `<td>-</td>`).join("")}</tr>`;
+          return;
+        }
+        body.innerHTML = rows
+          .map(
+            (row) =>
+              `<tr>${columns.map((col) => `<td>${row[col]}</td>`).join("")}</tr>`
+          )
+          .join("");
+      };
+
+      const renderTelemetry = (data) => {
+        document.getElementById("wallet-balance").textContent = `$${data.wallet_balance.toFixed(2)}`;
+        document.getElementById("uptime").textContent = `${data.uptime_sec}s`;
+        document.getElementById("safe-tx").textContent = data.safe_tx_count;
+        document.getElementById("positions").textContent = data.positions_placed;
+        document.getElementById("wins-losses").textContent = `${data.wins} / ${data.losses}`;
+        document.getElementById("drawdown-var").textContent = `${data.drawdown.toFixed(2)} / ${data.var.toFixed(2)} / ${data.var_10.toFixed(2)} / ${data.var_20.toFixed(2)}`;
+        document.getElementById("kill-switch").textContent = data.kill_switch ? "ON" : "OFF";
+        document.getElementById("exposure").textContent = data.exposure.toFixed(2);
+        state.killSwitch = data.kill_switch;
+
+        if (data.last_trade) {
+          document.getElementById("last-trade").textContent = `${data.last_trade.side} @ ${data.last_trade.price.toFixed(2)}`;
+          document.getElementById("last-market").textContent = data.last_trade.market;
+        }
+
+        const connectionHealth = document.getElementById("connection-health");
+        connectionHealth.innerHTML = data.connection_health
+          .map(
+            (row) =>
+              `<div class="list-row">
+                <span>${row.market}</span>
+                <span class="status ${row.status}">${row.status.toUpperCase()}</span>
+                <span>${row.last_heartbeat_sec}s</span>
+                <span>${row.reconnects} reconnects</span>
+              </div>`
+          )
+          .join("") || `<div class="list-row"><span>No connections yet.</span></div>`;
+
+        updateTable(
+          document.getElementById("latency-table"),
+          data.latency.map((row) => ({
+            market: row.label,
+            avg: row.avg_ms.toFixed(1),
+            last: row.last_ms.toFixed(1),
+            count: row.count,
+          })),
+          ["market", "avg", "last", "count"]
+        );
+
+        updateTable(
+          document.getElementById("pipeline-table"),
+          data.pipeline_latency.map((row) => ({
+            stage: row.label,
+            avg: row.avg_ms.toFixed(1),
+            last: row.last_ms.toFixed(1),
+            count: row.count,
+          })),
+          ["stage", "avg", "last", "count"]
+        );
+
+        updateTable(
+          document.getElementById("orderbook-table"),
+          data.orderbook_depth.map((row) => ({
+            market: row.market,
+            bids: row.bids.toFixed(2),
+            asks: row.asks.toFixed(2),
+            total: row.total.toFixed(2),
+          })),
+          ["market", "bids", "asks", "total"]
+        );
+
+        updateTable(
+          document.getElementById("fills-table"),
+          data.recent_fills.map((row) => ({
+            market: row.market,
+            action: row.action,
+            pnl: row.pnl.toFixed(2),
+            time: row.timestamp,
+          })),
+          ["market", "action", "pnl", "time"]
+        );
+
+        updateTable(
+          document.getElementById("incident-table"),
+          data.incidents.map((row) => ({
+            level: row.level,
+            message: row.message,
+            time: row.timestamp,
+          })),
+          ["level", "message", "time"]
+        );
+
+        updateTable(
+          document.getElementById("positions-table"),
+          data.positions.map((row) => ({
+            market: row.market,
+            yes: row.yes.toFixed(2),
+            no: row.no.toFixed(2),
+            cash: row.cash.toFixed(2),
+            pnl: row.pnl.toFixed(2),
+          })),
+          ["market", "yes", "no", "cash", "pnl"]
+        );
+
+        updateTable(
+          document.getElementById("per-market-table"),
+          data.per_market_pnl.map((row) => ({
+            market: row.market,
+            pnl: row.pnl.toFixed(2),
+          })),
+          ["market", "pnl"]
+        );
+
+        const pnlStart = Math.max(0, data.pnl_history.length - 10);
+        updateTable(
+          document.getElementById("pnl-history-table"),
+          data.pnl_history.slice(-10).map((value, index) => ({
+            entry: pnlStart + index + 1,
+            pnl: value.toFixed(2),
+          })),
+          ["entry", "pnl"]
+        );
+
+        updateTable(
+          document.getElementById("wallets-table"),
+          data.wallets.map((row) => ({
+            label: row.label,
+            address: row.address,
+          })),
+          ["label", "address"]
+        );
+
+        if (data.env_template) {
+          state.envTemplate = data.env_template;
+          document.getElementById("env-template").textContent = data.env_template;
+        }
+      };
+
+      const fetchTelemetry = async () => {
+        try {
+          const res = await fetch("/api/telemetry");
+          if (!res.ok) throw new Error("Network issue");
+          const data = await res.json();
+          renderTelemetry(data);
+          statusPill.textContent = "LIVE";
+          statusPill.classList.remove("warn");
+          statusText.textContent = "Streaming live telemetry";
+        } catch (err) {
+          statusPill.textContent = "OFFLINE";
+          statusPill.classList.add("warn");
+          statusText.textContent = "Unable to reach bot API";
+        }
+      };
+
+      document.getElementById("toggle-kill").addEventListener("click", async () => {
+        try {
+          const res = await fetch("/api/kill-switch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: !state.killSwitch }),
+          });
+          if (res.ok) {
+            actionFeedback.textContent = `Kill switch ${!state.killSwitch ? "enabled" : "disabled"}.`;
+            await fetchTelemetry();
+          }
+        } catch (err) {
+          actionFeedback.textContent = "Failed to toggle kill switch.";
+        }
+      });
+
+      document.getElementById("check-status").addEventListener("click", async () => {
+        try {
+          const res = await fetch("/api/status");
+          const data = await res.json();
+          apiStatus.textContent = `API: ${data.api_ok ? "OK" : "DOWN"}`;
+          actionFeedback.textContent = `Status: API ${data.api_ok ? "OK" : "DOWN"}, Redis ${data.redis_ok ? "OK" : "DOWN"}`;
+        } catch (err) {
+          actionFeedback.textContent = "Status check failed.";
+        }
+      });
+
+      document.getElementById("check-connections").addEventListener("click", async () => {
+        try {
+          const res = await fetch("/api/status");
+          const data = await res.json();
+          actionFeedback.textContent = `Wallet connection ${data.wallet_ok ? "OK" : "CHECK"}`;
+        } catch (err) {
+          actionFeedback.textContent = "Connection check failed.";
+        }
+      });
+
+      document.getElementById("download-env").addEventListener("click", () => {
+        if (!state.envTemplate) return;
+        const blob = new Blob([state.envTemplate], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = ".env";
+        anchor.click();
+        URL.revokeObjectURL(url);
+      });
+
+      const initSocket = () => {
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        const ws = new WebSocket(`${proto}://${location.host}/api/ws`);
+        ws.onmessage = (event) => {
+          try {
+            renderTelemetry(JSON.parse(event.data));
+          } catch (err) {
+            console.error(err);
+          }
+        };
+        ws.onclose = () => {
+          setTimeout(initSocket, 3000);
+        };
+      };
+
+      fetchTelemetry();
+      initSocket();
+      setInterval(fetchTelemetry, 15000);
+    </script>
+  </body>
+</html>

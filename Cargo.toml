@@ -1,0 +1,22 @@
+[package]
+name = "polymarket-latency-arb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+parking_lot = "0.12"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+tungstenite = "0.20"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5"
+ethers = "2.0"
+redis = { version = "0.23", features = ["aio", "tokio-comp"] }
+telegram-bot = "0.6"
+hex = "0.4"
+keccak-hash = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
