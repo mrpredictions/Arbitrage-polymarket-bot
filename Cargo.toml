@@ -18,3 +18,5 @@ redis = { version = "0.23", features = ["aio", "tokio-comp"] }
 telegram-bot = "0.6"
 hex = "0.4"
 keccak-hash = "0.10"
+hmac = "0.12"
+sha2 = "0.10"

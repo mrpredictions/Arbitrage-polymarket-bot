@@ -19,6 +19,8 @@ use parking_lot::RwLock;
 use redis::AsyncCommands;
 use reqwest::header::HeaderMap;
 use reqwest::Client;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, json, Value};
 use telegram_bot::types::requests::SendMessage;
@@ -41,6 +43,8 @@ struct Config {
     api_key: String,
     api_secret: String,
     passphrase: String,
+    chainlink_username: String,
+    chainlink_password: String,
     telegram_token: String,
     telegram_chat_id: i64,
     threshold_pct: f64,
@@ -70,6 +74,17 @@ struct Config {
     orderbook_max_fraction: f64,
     order_refresh_window_sec: u64,
     order_status_path: String,
+    direct_order_submit_enabled: bool,
+    direct_order_submit_mode: String,
+    direct_order_submit_path: String,
+    direct_order_submit_batch_path: String,
+    direct_order_submit_fallback_safe: bool,
+    direct_order_submit_market_field: String,
+    direct_order_submit_expiration_field: String,
+    direct_order_submit_expiration_sec: u64,
+    direct_order_submit_nonce_field: String,
+    direct_order_submit_nonce: String,
+    direct_order_submit_batch_response_key: String,
     market_maker_enabled: bool,
     market_maker_spread_pct: f64,
     market_maker_size_pct: f64,
@@ -107,6 +122,8 @@ impl Config {
         let api_key = env_or("POLYMARKET_API_KEY", "your_api_key");
         let api_secret = env_or("POLYMARKET_API_SECRET", "your_secret");
         let passphrase = env_or("POLYMARKET_API_PASSPHRASE", "your_passphrase");
+        let chainlink_username = env_or("CHAINLINK_USERNAME", "your_chainlink_username");
+        let chainlink_password = env_or("CHAINLINK_PASSWORD", "your_chainlink_password");
         let telegram_token = env_or("TELEGRAM_TOKEN", "your_telegram_bot_token");
         let telegram_chat_id = env_or_i64("TELEGRAM_CHAT_ID", 0);
         let threshold_pct = env_or_f64("THRESHOLD_PCT", 0.0003);
@@ -144,6 +161,24 @@ impl Config {
         let orderbook_max_fraction = env_or_f64("ORDERBOOK_MAX_FRACTION", 0.1);
         let order_refresh_window_sec = env_or_u64("ORDER_REFRESH_WINDOW_SEC", 30);
         let order_status_path = env_or("ORDER_STATUS_PATH", "orders");
+        let direct_order_submit_enabled = env_or_bool("DIRECT_ORDER_SUBMIT_ENABLED", false);
+        let direct_order_submit_mode = env_or("DIRECT_ORDER_SUBMIT_MODE", "single");
+        let direct_order_submit_path = env_or("DIRECT_ORDER_SUBMIT_PATH", "orders");
+        let direct_order_submit_batch_path = env_or("DIRECT_ORDER_SUBMIT_BATCH_PATH", "orders/batch");
+        let direct_order_submit_fallback_safe =
+            env_or_bool("DIRECT_ORDER_SUBMIT_FALLBACK_SAFE", true);
+        let direct_order_submit_market_field =
+            env_or("DIRECT_ORDER_SUBMIT_MARKET_FIELD", "");
+        let direct_order_submit_expiration_field =
+            env_or("DIRECT_ORDER_SUBMIT_EXPIRATION_FIELD", "expiration");
+        let direct_order_submit_expiration_sec =
+            env_or_u64("DIRECT_ORDER_SUBMIT_EXPIRATION_SEC", 0);
+        let direct_order_submit_nonce_field =
+            env_or("DIRECT_ORDER_SUBMIT_NONCE_FIELD", "nonce");
+        let direct_order_submit_nonce =
+            env_or("DIRECT_ORDER_SUBMIT_NONCE", "");
+        let direct_order_submit_batch_response_key =
+            env_or("DIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY", "");
         let market_maker_enabled = env_or_bool("MARKET_MAKER_ENABLED", false);
         let market_maker_spread_pct = env_or_f64("MARKET_MAKER_SPREAD_PCT", 0.01);
         let market_maker_size_pct = env_or_f64("MARKET_MAKER_SIZE_PCT", 0.1);
@@ -177,6 +212,8 @@ impl Config {
             api_key,
             api_secret,
             passphrase,
+            chainlink_username,
+            chainlink_password,
             telegram_token,
             telegram_chat_id,
             threshold_pct,
@@ -206,6 +243,17 @@ impl Config {
             orderbook_max_fraction,
             order_refresh_window_sec,
             order_status_path,
+            direct_order_submit_enabled,
+            direct_order_submit_mode,
+            direct_order_submit_path,
+            direct_order_submit_batch_path,
+            direct_order_submit_fallback_safe,
+            direct_order_submit_market_field,
+            direct_order_submit_expiration_field,
+            direct_order_submit_expiration_sec,
+            direct_order_submit_nonce_field,
+            direct_order_submit_nonce,
+            direct_order_submit_batch_response_key,
             market_maker_enabled,
             market_maker_spread_pct,
             market_maker_size_pct,
@@ -362,6 +410,50 @@ struct OrderbookSnapshot {
     best_ask: f64,
     bid_depth: f64,
     ask_depth: f64,
+}
+
+#[derive(Clone)]
+struct OrderIntent {
+    market: String,
+    token_id: String,
+    label: String,
+    direction: String,
+    price: f64,
+    size: f64,
+    order_type: String,
+}
+
+#[derive(Clone)]
+struct ApiOrderResult {
+    label: String,
+    direction: String,
+    token_id: String,
+    price: f64,
+    size: f64,
+    status: String,
+    remote_id: Option<String>,
+}
+
+impl OrderIntent {
+    fn new(
+        market: String,
+        token_id: String,
+        label: &str,
+        direction: &str,
+        price: f64,
+        size: f64,
+        order_type: &str,
+    ) -> Self {
+        Self {
+            market,
+            token_id,
+            label: label.to_string(),
+            direction: direction.to_string(),
+            price,
+            size,
+            order_type: order_type.to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -1091,6 +1183,16 @@ async fn process_update(
         return Ok(());
     }
     let avg_price = prices.iter().sum::<f64>() / prices.len() as f64;
+    let mut signal_price = avg_price;
+    if timeframe == "15m" {
+        signal_price = get_chainlink_price(
+            http_client,
+            &config,
+            "0x0002f8da67ea235d4401e394a2bed9965536b1b109da82e429c0a0a9ef29bc85",
+        )
+        .await
+        .unwrap_or(avg_price);
+    }
 
     let last_spot_key = format!("last_spot_{}_{}", asset, timeframe);
     let last_spot = if let Some(conn) = redis_conn {
@@ -1100,6 +1202,16 @@ async fn process_update(
             .map_err(|e| format!("Redis get error: {e}"))?;
         last_spot_str
             .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(signal_price)
+    } else {
+        signal_price
+    };
+
+    let vol_key = format!("{}:{}", asset, timeframe);
+    let volatility = update_volatility(vol_trackers, &vol_key, signal_price);
+
+    let params = config.market_params(asset);
+    let pct_change = (signal_price - last_spot).abs() / last_spot;
             .unwrap_or(avg_price)
     } else {
         avg_price
@@ -1116,6 +1228,7 @@ async fn process_update(
         return Ok(());
     }
 
+    let direction = if signal_price > last_spot { "UP" } else { "DOWN" };
     let direction = if avg_price > last_spot { "UP" } else { "DOWN" };
     println!(
         "{} {} spot moved {:.2}% -> {}",
@@ -1192,6 +1305,7 @@ async fn process_update(
 
     let mut call_data = vec![];
     let mut action_label = None;
+    let mut order_intents: Vec<OrderIntent> = Vec::new();
     let mut order_intents: Vec<(String, String, String, f64, f64)> = Vec::new();
 
     if yes_price + no_price < params.sum_threshold {
@@ -1215,6 +1329,14 @@ async fn process_update(
             "gtc".to_string(),
         );
         call_data.push((clob_addr, U256::zero(), buy_yes_data));
+        order_intents.push(OrderIntent::new(
+            market_key.clone(),
+            token_info.yes_token_id.clone(),
+            "buy_yes",
+            "buy",
+            yes_price + 0.005,
+            size_yes,
+            "gtc",
         order_intents.push((
             token_info.yes_token_id.clone(),
             "buy_yes".to_string(),
@@ -1230,6 +1352,14 @@ async fn process_update(
             "gtc".to_string(),
         );
         call_data.push((clob_addr, U256::zero(), buy_no_data));
+        order_intents.push(OrderIntent::new(
+            market_key.clone(),
+            token_info.no_token_id.clone(),
+            "buy_no",
+            "buy",
+            no_price + 0.005,
+            size_no,
+            "gtc",
         order_intents.push((
             token_info.no_token_id.clone(),
             "buy_no".to_string(),
@@ -1251,6 +1381,14 @@ async fn process_update(
             "gtc".to_string(),
         );
         call_data.push((clob_addr, U256::zero(), sell_yes_data));
+        order_intents.push(OrderIntent::new(
+            market_key.clone(),
+            token_info.yes_token_id.clone(),
+            "sell_yes",
+            "sell",
+            1.0 - (yes_price - 0.005),
+            sell_yes_size,
+            "gtc",
         order_intents.push((
             token_info.yes_token_id.clone(),
             "sell_yes".to_string(),
@@ -1272,6 +1410,14 @@ async fn process_update(
             "gtc".to_string(),
         );
         call_data.push((clob_addr, U256::zero(), sell_no_data));
+        order_intents.push(OrderIntent::new(
+            market_key.clone(),
+            token_info.no_token_id.clone(),
+            "sell_no",
+            "sell",
+            1.0 - (no_price - 0.005),
+            sell_no_size,
+            "gtc",
         order_intents.push((
             token_info.no_token_id.clone(),
             "sell_no".to_string(),
@@ -1299,6 +1445,14 @@ async fn process_update(
                 "gtc".to_string(),
             );
             call_data.push((clob_addr, U256::zero(), buy_data));
+            order_intents.push(OrderIntent::new(
+                market_key.clone(),
+                token_info.yes_token_id.clone(),
+                "buy_yes",
+                "buy",
+                yes_price + 0.005,
+                size,
+                "gtc",
             order_intents.push((
                 token_info.yes_token_id.clone(),
                 "buy_yes".to_string(),
@@ -1320,6 +1474,14 @@ async fn process_update(
                 "gtc".to_string(),
             );
             call_data.push((clob_addr, U256::zero(), sell_data));
+            order_intents.push(OrderIntent::new(
+                market_key.clone(),
+                token_info.yes_token_id.clone(),
+                "sell_yes",
+                "sell",
+                1.0 - (yes_price - 0.005),
+                sell_size,
+                "gtc",
             order_intents.push((
                 token_info.yes_token_id.clone(),
                 "sell_yes".to_string(),
@@ -1348,6 +1510,14 @@ async fn process_update(
                 "gtc".to_string(),
             );
             call_data.push((clob_addr, U256::zero(), buy_data));
+            order_intents.push(OrderIntent::new(
+                market_key.clone(),
+                token_info.no_token_id.clone(),
+                "buy_no",
+                "buy",
+                no_price + 0.005,
+                size,
+                "gtc",
             order_intents.push((
                 token_info.no_token_id.clone(),
                 "buy_no".to_string(),
@@ -1369,6 +1539,14 @@ async fn process_update(
                 "gtc".to_string(),
             );
             call_data.push((clob_addr, U256::zero(), sell_data));
+            order_intents.push(OrderIntent::new(
+                market_key.clone(),
+                token_info.no_token_id.clone(),
+                "sell_no",
+                "sell",
+                1.0 - (no_price - 0.005),
+                sell_size,
+                "gtc",
             order_intents.push((
                 token_info.no_token_id.clone(),
                 "sell_no".to_string(),
@@ -1407,6 +1585,14 @@ async fn process_update(
                 "gtc".to_string(),
             );
             call_data.push((clob_addr, U256::zero(), buy_data));
+            order_intents.push(OrderIntent::new(
+                market_key.clone(),
+                token_info.yes_token_id.clone(),
+                "mm_buy_yes",
+                "buy",
+                yes_buy_price,
+                yes_buy_size,
+                "gtc",
             order_intents.push((
                 token_info.yes_token_id.clone(),
                 "mm_buy_yes".to_string(),
@@ -1424,6 +1610,14 @@ async fn process_update(
                 "gtc".to_string(),
             );
             call_data.push((clob_addr, U256::zero(), sell_data));
+            order_intents.push(OrderIntent::new(
+                market_key.clone(),
+                token_info.yes_token_id.clone(),
+                "mm_sell_yes",
+                "sell",
+                yes_sell_price,
+                yes_sell_size,
+                "gtc",
             order_intents.push((
                 token_info.yes_token_id.clone(),
                 "mm_sell_yes".to_string(),
@@ -1449,6 +1643,14 @@ async fn process_update(
                 "gtc".to_string(),
             );
             call_data.push((clob_addr, U256::zero(), buy_data));
+            order_intents.push(OrderIntent::new(
+                market_key.clone(),
+                token_info.no_token_id.clone(),
+                "mm_buy_no",
+                "buy",
+                no_buy_price,
+                no_buy_size,
+                "gtc",
             order_intents.push((
                 token_info.no_token_id.clone(),
                 "mm_buy_no".to_string(),
@@ -1466,6 +1668,14 @@ async fn process_update(
                 "gtc".to_string(),
             );
             call_data.push((clob_addr, U256::zero(), sell_data));
+            order_intents.push(OrderIntent::new(
+                market_key.clone(),
+                token_info.no_token_id.clone(),
+                "mm_sell_no",
+                "sell",
+                no_sell_price,
+                no_sell_size,
+                "gtc",
             order_intents.push((
                 token_info.no_token_id.clone(),
                 "mm_sell_no".to_string(),
@@ -1485,6 +1695,7 @@ async fn process_update(
         let mut pending_orders = Vec::new();
         let multi_send_addr = config.multi_send_contract;
         let multi_data = encode_multi_send(call_data);
+        let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
         let exec_data = encode_exec_transaction(
             multi_send_addr,
@@ -1497,6 +1708,58 @@ async fn process_update(
             H160::zero(),
             H160::zero(),
         );
+
+        let mut placed_via_api = false;
+        if config.direct_order_submit_enabled {
+            match submit_orders_via_api(http_client, &config, &order_intents).await {
+                Ok(api_orders) => {
+                    placed_via_api = true;
+                    for api_order in api_orders {
+                        pending_orders.push(OpenOrder {
+                            id: format!("{}:{}:{}", market_key, api_order.label, current_time),
+                            market: market_key.clone(),
+                            side: api_order.label,
+                            direction: api_order.direction,
+                            token_id: api_order.token_id,
+                            price: api_order.price,
+                            size: api_order.size,
+                            created_at,
+                            status: api_order.status,
+                            last_update: Instant::now(),
+                            remote_id: api_order.remote_id,
+                        });
+                    }
+                }
+                Err(err) => {
+                    push_incident(state, "warning", &format!("order submit failed: {err}"));
+                    if !config.direct_order_submit_fallback_safe {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        if !placed_via_api {
+            let tx = TransactionRequest::new()
+                .to(config.safe_address)
+                .data(exec_data)
+                .chain_id(config.chain_id);
+            let typed_tx: TypedTransaction = tx.into();
+            let signature = wallet.sign_transaction(&typed_tx).await.unwrap();
+            let rlp = typed_tx.rlp_signed(&signature);
+            if !config.dry_run {
+                let pending = provider.send_raw_transaction(rlp).await.unwrap();
+                let tx_hash = pending.tx_hash();
+                let state_clone = state.clone();
+                let provider_clone = provider.clone();
+                let config_clone = config.clone();
+                tokio::spawn(async move {
+                    await_safe_tx_receipt(state_clone, provider_clone, tx_hash, config_clone).await;
+                });
+            } else {
+                println!("[DRY-RUN] Batched via Gnosis");
+            }
+        }
 
         let tx = TransactionRequest::new()
             .to(config.safe_address)
@@ -1524,6 +1787,35 @@ async fn process_update(
         }
 
         let base_id = format!("{}:{}", asset, timeframe);
+        if !placed_via_api {
+            for intent in order_intents.iter() {
+                pending_orders.push(OpenOrder {
+                    id: format!("{}:{}:{}", base_id, intent.label, current_time),
+                    market: base_id.clone(),
+                    side: intent.label.clone(),
+                    direction: intent.direction.clone(),
+                    token_id: intent.token_id.clone(),
+                    price: intent.price,
+                    size: intent.size,
+                    created_at,
+                    status: "open".to_string(),
+                    last_update: Instant::now(),
+                    remote_id: None,
+                });
+            }
+        }
+        track_open_orders(state, pending_orders);
+        if !placed_via_api {
+            sync_open_order_ids(state, http_client, &config).await;
+        }
+
+    let trade_summary = TradeSummary {
+        market: format!("{}:{}", asset, timeframe),
+        side: action_label.clone().unwrap_or_else(|| "trade".to_string()),
+        price: signal_price,
+        size: config.max_size,
+        timestamp: now_string(),
+    };
         for (token_id, label, direction, price, size) in order_intents {
             pending_orders.push(OpenOrder {
                 id: format!("{}:{}:{}", base_id, label, current_time),
@@ -1576,6 +1868,12 @@ async fn process_update(
                 action: trade_summary.side.clone(),
                 pnl: 0.0,
                 size: config.max_size,
+            price: signal_price,
+            timestamp: trade_summary.timestamp.clone(),
+            order_id: None,
+            token_id: None,
+        },
+    );
                 price: avg_price,
                 timestamp: trade_summary.timestamp.clone(),
                 order_id: None,
@@ -1594,6 +1892,7 @@ async fn process_update(
     }
 
     if let Some(conn) = redis_conn {
+        conn.set(last_spot_key, signal_price.to_string()).await.unwrap();
         conn.set(last_spot_key, avg_price.to_string()).await.unwrap();
     }
 
@@ -1754,6 +2053,7 @@ async fn poll_fills(state: AppState, http_client: Client, config: Config) {
                 push_incident(&state, "warning", &format!("fills fetch failed: {err}"));
             }
         }
+        sleep(Duration::from_secs(config.order_status_poll_sec.max(5))).await;
         sleep(Duration::from_secs(10)).await;
     }
 }
@@ -2416,6 +2716,159 @@ async fn fetch_order_status(
     Ok(status)
 }
 
+async fn submit_orders_via_api(
+    http_client: &Client,
+    config: &Config,
+    intents: &[OrderIntent],
+) -> Result<Vec<ApiOrderResult>, String> {
+    let mode = config.direct_order_submit_mode.to_lowercase();
+    if mode == "batch" {
+        submit_orders_batch(http_client, config, intents).await
+    } else {
+        submit_orders_single(http_client, config, intents).await
+    }
+}
+
+async fn submit_orders_single(
+    http_client: &Client,
+    config: &Config,
+    intents: &[OrderIntent],
+) -> Result<Vec<ApiOrderResult>, String> {
+    let mut results = Vec::new();
+    for intent in intents {
+        let payload = build_order_payload(config, intent);
+        let url = format!("{}/{}", config.host, config.direct_order_submit_path.trim_matches('/'));
+        let response = http_client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("order submit error: {e}"))?;
+        let status = response.status();
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("order submit json error: {e}"))?;
+        if !status.is_success() {
+            return Err(parse_order_error(&payload, status.as_u16()));
+        }
+        let result = parse_order_result(intent, &payload)?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+async fn submit_orders_batch(
+    http_client: &Client,
+    config: &Config,
+    intents: &[OrderIntent],
+) -> Result<Vec<ApiOrderResult>, String> {
+    let orders: Vec<Value> = intents
+        .iter()
+        .map(|intent| build_order_payload(config, intent))
+        .collect();
+    let payload = json!({ "orders": orders });
+    let url = format!(
+        "{}/{}",
+        config.host,
+        config.direct_order_submit_batch_path.trim_matches('/')
+    );
+    let response = http_client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("order submit error: {e}"))?;
+    let status = response.status();
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("order submit json error: {e}"))?;
+    if !status.is_success() {
+        return Err(parse_order_error(&payload, status.as_u16()));
+    }
+    let data = payload
+        .get(config.direct_order_submit_batch_response_key.as_str())
+        .and_then(Value::as_array)
+        .or_else(|| payload.get("data").and_then(Value::as_array))
+        .or_else(|| payload.get("results").and_then(Value::as_array))
+        .or_else(|| payload.as_array())
+        .ok_or_else(|| "batch order response not array".to_string())?;
+    if data.len() != intents.len() {
+        return Err("batch order response length mismatch".to_string());
+    }
+    let mut results = Vec::new();
+    for (intent, item) in intents.iter().zip(data.iter()) {
+        let result = parse_order_result(intent, item)?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+fn build_order_payload(config: &Config, intent: &OrderIntent) -> Value {
+    let mut payload = json!({
+        "token_id": intent.token_id,
+        "price": intent.price,
+        "size": intent.size,
+        "side": intent.direction,
+        "order_type": intent.order_type,
+        "client_order_id": format!("{}:{}", intent.label, now_string()),
+    });
+    if config.direct_order_submit_expiration_sec > 0
+        && !config.direct_order_submit_expiration_field.is_empty()
+    {
+        payload[config.direct_order_submit_expiration_field.as_str()] =
+            Value::from(config.direct_order_submit_expiration_sec);
+    }
+    if !config.direct_order_submit_market_field.is_empty() {
+        payload[config.direct_order_submit_market_field.as_str()] = Value::from(intent.market.clone());
+    }
+    if !config.direct_order_submit_nonce_field.is_empty()
+        && !config.direct_order_submit_nonce.is_empty()
+    {
+        payload[config.direct_order_submit_nonce_field.as_str()] =
+            Value::from(config.direct_order_submit_nonce.clone());
+    }
+    payload
+}
+
+fn parse_order_result(intent: &OrderIntent, payload: &Value) -> Result<ApiOrderResult, String> {
+    let data = payload.get("data").unwrap_or(payload);
+    if let Some(error) = data.get("error") {
+        return Err(format!("order submit error: {error}"));
+    }
+    let status = data
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("open")
+        .to_string();
+    let remote_id = data
+        .get("id")
+        .or_else(|| data.get("order_id"))
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
+    Ok(ApiOrderResult {
+        label: intent.label.clone(),
+        direction: intent.direction.clone(),
+        token_id: intent.token_id.clone(),
+        price: intent.price,
+        size: intent.size,
+        status,
+        remote_id,
+    })
+}
+
+fn parse_order_error(payload: &Value, status: u16) -> String {
+    let data = payload.get("data").unwrap_or(payload);
+    if let Some(error) = data.get("error") {
+        return format!("order submit failed ({status}): {error}");
+    }
+    if let Some(errors) = data.get("errors") {
+        return format!("order submit failed ({status}): {errors}");
+    }
+    format!("order submit failed ({status})")
+}
+
 async fn sync_order_status_by_id(
     state: &AppState,
     http_client: &Client,
@@ -2910,6 +3363,50 @@ fn cap_size_by_depth(size: f64, book: Option<&OrderbookSnapshot>, side: &str, fr
     size.min(cap)
 }
 
+async fn get_chainlink_price(http_client: &Client, config: &Config, feed_id: &str) -> Option<f64> {
+    let url = "https://api.dataengine.chain.link/api/v1/reports/latest";
+    let query = format!("?feedID={}", feed_id);
+    let full_path = format!("{}{}", url, query);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let message = format!(
+        "GET|{}||{}|{}",
+        full_path, config.chainlink_username, timestamp
+    );
+    let signature = hmac_sha256(config.chainlink_password.as_bytes(), message.as_bytes());
+    let sig_hex = hex::encode(signature);
+
+    let mut headers = HeaderMap::new();
+    headers.insert("Authorization", config.chainlink_username.parse().ok()?);
+    headers.insert(
+        "X-Authorization-Timestamp",
+        timestamp.to_string().parse().ok()?,
+    );
+    headers.insert(
+        "X-Authorization-Signature-SHA256",
+        sig_hex.parse().ok()?,
+    );
+
+    let resp = http_client
+        .get(full_path)
+        .headers(headers)
+        .send()
+        .await
+        .ok()?;
+    let data: Value = resp.json().await.ok()?;
+    data.get("report")?
+        .get("benchmarkPrice")?
+        .as_f64()
+}
+
+fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("hmac key");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
+}
+
 async fn fetch_balance(http_client: &Client, host: &str) -> Result<f64, String> {
     let url = format!("{}/balance", host);
     let response = http_client
@@ -3110,6 +3607,7 @@ fn parse_market_overrides(input: &str) -> HashMap<String, MarketOverride> {
 
 fn build_env_template(config: &Config) -> String {
     format!(
+        "CLOB_HOST={}\nGAMMA_API={}\nPOLYGON_RPC={}\nSAFE_ADDRESS={}\nBOT_ADDRESS={}\nCHAIN_ID={}\nPRIVATE_KEY={}\nPOLYMARKET_API_KEY={}\nPOLYMARKET_API_SECRET={}\nPOLYMARKET_API_PASSPHRASE={}\nCHAINLINK_USERNAME={}\nCHAINLINK_PASSWORD={}\nTELEGRAM_TOKEN={}\nTELEGRAM_CHAT_ID={}\nTHRESHOLD_PCT={}\nMIN_EDGE_PCT={}\nSUM_THRESHOLD={}\nMAX_SIZE={}\nRISK_PCT={}\nDRY_RUN={}\nCOOLDOWN_SEC={}\nDELAY_ADD_1H_SEC={}\nMAX_DAILY_LOSS={}\nMAX_INVENTORY={}\nMIN_LIQUIDITY={}\nTOKEN_CACHE_TTL_SEC={}\nKILL_SWITCH={}\nENABLED_ASSETS={}\nENABLED_TIMEFRAMES={}\nSTARTING_CAPITAL={}\nORDER_TTL_SEC={}\nORDER_PRICE_DRIFT_PCT={}\nFEED_STALE_SEC={}\nORDERBOOK_STALE_SEC={}\nORDER_ID_SYNC_WINDOW_SEC={}\nORDER_STATUS_POLL_SEC={}\nORDER_REFRESH_WINDOW_SEC={}\nORDER_STATUS_PATH={}\nSAFE_TX_CONFIRM_TIMEOUT_SEC={}\nSAFE_TX_CONFIRM_POLL_SEC={}\nORDERBOOK_MAX_FRACTION={}\nDIRECT_ORDER_SUBMIT_ENABLED={}\nDIRECT_ORDER_SUBMIT_MODE={}\nDIRECT_ORDER_SUBMIT_PATH={}\nDIRECT_ORDER_SUBMIT_BATCH_PATH={}\nDIRECT_ORDER_SUBMIT_FALLBACK_SAFE={}\nDIRECT_ORDER_SUBMIT_MARKET_FIELD={}\nDIRECT_ORDER_SUBMIT_EXPIRATION_FIELD={}\nDIRECT_ORDER_SUBMIT_EXPIRATION_SEC={}\nDIRECT_ORDER_SUBMIT_NONCE_FIELD={}\nDIRECT_ORDER_SUBMIT_NONCE={}\nDIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY={}\nMARKET_MAKER_ENABLED={}\nMARKET_MAKER_SPREAD_PCT={}\nMARKET_MAKER_SIZE_PCT={}\nUSDC_CONTRACT={}\nUSDC_DECIMALS={}\nCLOB_CONTRACT={}\nMULTISEND_CONTRACT={}\nORDERBOOK_PATH={}\nMARKET_OVERRIDES={}\n",
         "CLOB_HOST={}\nGAMMA_API={}\nPOLYGON_RPC={}\nSAFE_ADDRESS={}\nBOT_ADDRESS={}\nCHAIN_ID={}\nPRIVATE_KEY={}\nPOLYMARKET_API_KEY={}\nPOLYMARKET_API_SECRET={}\nPOLYMARKET_API_PASSPHRASE={}\nTELEGRAM_TOKEN={}\nTELEGRAM_CHAT_ID={}\nTHRESHOLD_PCT={}\nMIN_EDGE_PCT={}\nSUM_THRESHOLD={}\nMAX_SIZE={}\nRISK_PCT={}\nDRY_RUN={}\nCOOLDOWN_SEC={}\nDELAY_ADD_1H_SEC={}\nMAX_DAILY_LOSS={}\nMAX_INVENTORY={}\nMIN_LIQUIDITY={}\nTOKEN_CACHE_TTL_SEC={}\nKILL_SWITCH={}\nENABLED_ASSETS={}\nENABLED_TIMEFRAMES={}\nSTARTING_CAPITAL={}\nORDER_TTL_SEC={}\nORDER_PRICE_DRIFT_PCT={}\nFEED_STALE_SEC={}\nORDERBOOK_STALE_SEC={}\nORDER_ID_SYNC_WINDOW_SEC={}\nORDER_STATUS_POLL_SEC={}\nORDER_REFRESH_WINDOW_SEC={}\nORDER_STATUS_PATH={}\nSAFE_TX_CONFIRM_TIMEOUT_SEC={}\nSAFE_TX_CONFIRM_POLL_SEC={}\nORDERBOOK_MAX_FRACTION={}\nMARKET_MAKER_ENABLED={}\nMARKET_MAKER_SPREAD_PCT={}\nMARKET_MAKER_SIZE_PCT={}\nUSDC_CONTRACT={}\nUSDC_DECIMALS={}\nCLOB_CONTRACT={}\nMULTISEND_CONTRACT={}\nORDERBOOK_PATH={}\nMARKET_OVERRIDES={}\n",
         config.host,
         config.gamma_api,
@@ -3121,6 +3619,8 @@ fn build_env_template(config: &Config) -> String {
         config.api_key,
         config.api_secret,
         config.passphrase,
+        config.chainlink_username,
+        config.chainlink_password,
         config.telegram_token,
         config.telegram_chat_id,
         config.threshold_pct,
@@ -3150,6 +3650,17 @@ fn build_env_template(config: &Config) -> String {
         config.safe_tx_confirm_timeout_sec,
         config.safe_tx_confirm_poll_sec,
         config.orderbook_max_fraction,
+        config.direct_order_submit_enabled,
+        config.direct_order_submit_mode,
+        config.direct_order_submit_path,
+        config.direct_order_submit_batch_path,
+        config.direct_order_submit_fallback_safe,
+        config.direct_order_submit_market_field,
+        config.direct_order_submit_expiration_field,
+        config.direct_order_submit_expiration_sec,
+        config.direct_order_submit_nonce_field,
+        config.direct_order_submit_nonce,
+        config.direct_order_submit_batch_response_key,
         config.market_maker_enabled,
         config.market_maker_spread_pct,
         config.market_maker_size_pct,
