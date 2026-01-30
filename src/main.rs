@@ -168,17 +168,17 @@ impl Config {
         let direct_order_submit_fallback_safe =
             env_or_bool("DIRECT_ORDER_SUBMIT_FALLBACK_SAFE", true);
         let direct_order_submit_market_field =
-            env_or("DIRECT_ORDER_SUBMIT_MARKET_FIELD", "market");
+            env_or("DIRECT_ORDER_SUBMIT_MARKET_FIELD", "");
         let direct_order_submit_expiration_field =
-            env_or("DIRECT_ORDER_SUBMIT_EXPIRATION_FIELD", "expiration_sec");
+            env_or("DIRECT_ORDER_SUBMIT_EXPIRATION_FIELD", "expiration");
         let direct_order_submit_expiration_sec =
             env_or_u64("DIRECT_ORDER_SUBMIT_EXPIRATION_SEC", 0);
         let direct_order_submit_nonce_field =
-            env_or("DIRECT_ORDER_SUBMIT_NONCE_FIELD", "");
+            env_or("DIRECT_ORDER_SUBMIT_NONCE_FIELD", "nonce");
         let direct_order_submit_nonce =
             env_or("DIRECT_ORDER_SUBMIT_NONCE", "");
         let direct_order_submit_batch_response_key =
-            env_or("DIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY", "data");
+            env_or("DIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY", "");
         let market_maker_enabled = env_or_bool("MARKET_MAKER_ENABLED", false);
         let market_maker_spread_pct = env_or_f64("MARKET_MAKER_SPREAD_PCT", 0.01);
         let market_maker_size_pct = env_or_f64("MARKET_MAKER_SIZE_PCT", 0.1);

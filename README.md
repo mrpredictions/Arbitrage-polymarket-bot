@@ -82,6 +82,14 @@ DIRECT_ORDER_SUBMIT_NONCE_FIELD=nonce
 DIRECT_ORDER_SUBMIT_NONCE=d3b07384-...
 ```
 
+If the provider uses **token IDs only** (no market/condition field), you can omit the market field:
+
+```
+DIRECT_ORDER_SUBMIT_MARKET_FIELD=
+DIRECT_ORDER_SUBMIT_EXPIRATION_FIELD=expiration
+DIRECT_ORDER_SUBMIT_NONCE_FIELD=nonce
+```
+
 If the **batch response** looks like this:
 
 ```json
@@ -92,6 +100,21 @@ Then set:
 
 ```
 DIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY=results
+```
+
+If the **batch response** is a root array:
+
+```json
+[
+  { "success": true, "errorMsg": "", "orderId": "abc", "orderHashes": ["0x..."] },
+  { "success": false, "errorMsg": "INVALID_ORDER_MIN_SIZE", "orderId": "", "orderHashes": [] }
+]
+```
+
+Then set:
+
+```
+DIRECT_ORDER_SUBMIT_BATCH_RESPONSE_KEY=
 ```
 
 ---
